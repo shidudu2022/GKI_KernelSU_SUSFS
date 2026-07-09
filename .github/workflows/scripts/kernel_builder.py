@@ -308,6 +308,15 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         if hooks_patch.exists():
             self._run_cmd(f"cp {hooks_patch} . && patch -p1 -F 3 < 69_hide_stuff.patch", check=False)
 
+    def apply_security_patches(self):
+        logger.info("=== 应用安全补丁 ===")
+        patch_path = Path(__file__).resolve().parents[3] / "patches" / "cve-2024-43093_unicode_path_filter.patch"
+        if not patch_path.exists():
+            logger.warning(f"安全补丁不存在: {patch_path}")
+            return
+        self._chdir(self.work_dir / "common")
+        self._run_cmd(f"patch -p1 -F 3 < {patch_path}", check=False)
+
     def apply_zram_patches(self):
         if not self.config.use_zram:
             return
@@ -430,6 +439,24 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         with open(config_file, "a") as f:
             f.write("CONFIG_MODULE_SIG_FORCE=n\n")
 
+    def _resolve_kernel_build_timestamp(self) -> str:
+        """Use os_patch_level date so kernel UTS time aligns with system build time."""
+        import calendar
+        import datetime
+
+        os_patch = self.config.os_patch_level
+        if os_patch and os_patch != "lts":
+            try:
+                year_str, month_str = os_patch.split("-", 1)
+                year, month = int(year_str), int(month_str)
+                day = min(5, calendar.monthrange(year, month)[1])
+                build_dt = datetime.datetime(year, month, day, 12, 0, 0, tzinfo=datetime.timezone.utc)
+                return build_dt.strftime("%a %b %d %H:%M:%S UTC %Y")
+            except (ValueError, IndexError):
+                logger.warning(f"无法解析 os_patch_level: {os_patch}，回退到当前 UTC 时间")
+
+        return datetime.datetime.now(datetime.timezone.utc).strftime("%a %b %d %H:%M:%S UTC %Y")
+
     def configure_kernel_name(self):
         logger.info("=== 配置内核名称 ===")
         self._chdir(self.work_dir)
@@ -455,8 +482,8 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 with open(setlocalversion, "w") as f:
                     f.write(content)
 
-        import datetime
-        current_time = datetime.datetime.utcnow().strftime("%a %b %d %H:%M:%S UTC %Y")
+        current_time = self._resolve_kernel_build_timestamp()
+        logger.info(f"内核编译时间戳: {current_time} (os_patch={self.config.os_patch_level})")
         mkcompile_h = self.work_dir / "common/scripts/mkcompile_h"
         if mkcompile_h.exists():
             with open(mkcompile_h, "r") as f:
@@ -704,6 +731,7 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             self.add_bbg()
             self.apply_susfs_patches()
             self.apply_sukisu_patches()
+            self.apply_security_patches()
             self.apply_zram_patches()
             self.apply_task_mmu_fixes()
             self.configure_kernel()
