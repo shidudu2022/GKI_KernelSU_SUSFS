@@ -484,13 +484,17 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
 
     def _patch_setup_env_for_timestamp(self, epoch: int):
         epoch_file = self.work_dir / "common/.kleaf_source_date_epoch"
-        setup_env = self.work_dir / "build/_setup_env.sh"
         if not epoch_file.parent.exists():
             return
         with open(epoch_file, "w") as f:
             f.write(str(epoch))
-        if not setup_env.exists():
-            logger.warning(f"未找到 {setup_env}，跳过编译时间补丁")
+
+        setup_env_candidates = list(self.work_dir.glob("**/build/_setup_env.sh"))
+        setup_env_candidates += list(self.work_dir.glob("**/_setup_env.sh"))
+        setup_env = next((p for p in setup_env_candidates if p.is_file()), None)
+        if setup_env is None:
+            logger.warning("未找到 _setup_env.sh，尝试修补 stamp.bzl")
+            self._patch_stamp_bzl_for_timestamp(epoch)
             return
 
         marker = "# kleaf_source_date_epoch_override"
@@ -508,11 +512,40 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             'if [ -z "${SOURCE_DATE_EPOCH}" ]; then'
         )
         if needle not in content:
-            logger.warning("_setup_env.sh 结构变化，无法注入 SOURCE_DATE_EPOCH 覆盖")
+            logger.warning(f"{setup_env} 结构变化，改为修补 stamp.bzl")
+            self._patch_stamp_bzl_for_timestamp(epoch)
             return
         with open(setup_env, "w") as f:
             f.write(content.replace(needle, insert, 1))
-        logger.info(f"已修补 _setup_env.sh，SOURCE_DATE_EPOCH={epoch}")
+        logger.info(f"已修补 {setup_env}，SOURCE_DATE_EPOCH={epoch}")
+
+    def _patch_stamp_bzl_for_timestamp(self, epoch: int):
+        stamp_bzl = self.work_dir / "build/kernel/kleaf/impl/stamp.bzl"
+        if not stamp_bzl.exists():
+            logger.warning(f"未找到 {stamp_bzl}，无法注入 SOURCE_DATE_EPOCH")
+            return
+
+        marker = "# kleaf_source_date_epoch_override"
+        with open(stamp_bzl, "r") as f:
+            content = f.read()
+        if marker in content:
+            return
+
+        old = 'export SOURCE_DATE_EPOCH=0'
+        new = (
+            f'{marker}\n'
+            'if [ -f "common/.kleaf_source_date_epoch" ]; then\n'
+            '  export SOURCE_DATE_EPOCH=$(cat "common/.kleaf_source_date_epoch")\n'
+            'else\n'
+            '  export SOURCE_DATE_EPOCH=0\n'
+            'fi'
+        )
+        if old not in content:
+            logger.warning("stamp.bzl 结构变化，无法注入 SOURCE_DATE_EPOCH 覆盖")
+            return
+        with open(stamp_bzl, "w") as f:
+            f.write(content.replace(old, new, 1))
+        logger.info(f"已修补 {stamp_bzl}，SOURCE_DATE_EPOCH={epoch}")
 
     def _apply_kbuild_build_timestamp(self):
         timestamp = self._resolve_kbuild_build_timestamp()

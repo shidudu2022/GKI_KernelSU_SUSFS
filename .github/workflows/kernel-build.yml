@@ -250,6 +250,8 @@ jobs:
           ls -la
 
       - name: Generate release body
+        env:
+          BUILD_TIMESTAMP: ${{ github.event.inputs.build_timestamp }}
         run: |
           ARGS="--android ${{ github.event.inputs.android_version }}"
           ARGS="$ARGS --kernel ${{ github.event.inputs.kernel_version }}"
@@ -258,7 +260,7 @@ jobs:
           ARGS="$ARGS --ksu-version ${{ github.event.inputs.kernelsu_version }}"
           [ "${{ github.event.inputs.use_zram }}" = "true" ] && ARGS="$ARGS --zram"
           [ "${{ github.event.inputs.use_kpm }}" = "false" ] && ARGS="$ARGS --no-kpm"
-          [ -n "${{ github.event.inputs.build_timestamp }}" ] && ARGS="$ARGS --build-timestamp ${{ github.event.inputs.build_timestamp }}"
+          [ -n "$BUILD_TIMESTAMP" ] && ARGS="$ARGS --build-timestamp $BUILD_TIMESTAMP"
           python3 ${{ env.SCRIPTS_DIR }}/release_generator.py release-files/RELEASE_BODY.md $ARGS
 
       - name: Create release
