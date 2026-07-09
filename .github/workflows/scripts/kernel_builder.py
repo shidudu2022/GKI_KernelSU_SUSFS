@@ -308,15 +308,6 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         if hooks_patch.exists():
             self._run_cmd(f"cp {hooks_patch} . && patch -p1 -F 3 < 69_hide_stuff.patch", check=False)
 
-    def apply_security_patches(self):
-        logger.info("=== 应用安全补丁 ===")
-        patch_path = Path(__file__).resolve().parents[3] / "patches" / "cve-2024-43093_unicode_path_filter.patch"
-        if not patch_path.exists():
-            logger.warning(f"安全补丁不存在: {patch_path}")
-            return
-        self._chdir(self.work_dir / "common")
-        self._run_cmd(f"patch -p1 -F 3 < {patch_path}", check=False)
-
     def apply_zram_patches(self):
         if not self.config.use_zram:
             return
@@ -732,7 +723,6 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             self.add_bbg()
             self.apply_susfs_patches()
             self.apply_sukisu_patches()
-            self.apply_security_patches()
             self.apply_zram_patches()
             self.apply_task_mmu_fixes()
             self.configure_kernel()
