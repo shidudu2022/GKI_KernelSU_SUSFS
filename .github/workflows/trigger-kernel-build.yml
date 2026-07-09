@@ -44,6 +44,15 @@ jobs:
               send_telegram: true,
             };
             const inputs = { ...defaults, ...config };
+            for (const [key, value] of Object.entries(inputs)) {
+              if (typeof value === 'boolean') {
+                inputs[key] = value ? 'true' : 'false';
+              } else if (value === null || value === undefined) {
+                inputs[key] = '';
+              } else {
+                inputs[key] = String(value);
+              }
+            }
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
