@@ -279,6 +279,7 @@ jobs:
 
       - name: Send Telegram Notification
         if: ${{ github.event.inputs.send_telegram == 'true' }}
+        continue-on-error: true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
