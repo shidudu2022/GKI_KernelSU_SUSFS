@@ -192,13 +192,24 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         self._chdir(self.work_dir)
         formatted_branch = self.config.formatted_branch
 
-        self._run_cmd(f"$REPO init --depth=1 --u https://android.googlesource.com/kernel/manifest "
-                     f"-b common-{formatted_branch} --repo-rev=v2.16", check=False)
+        result = self._run_cmd(
+            f"$REPO init --depth=1 -u https://android.googlesource.com/kernel/manifest "
+            f"-b common-{formatted_branch} --repo-rev=v2.16",
+            check=False,
+        )
+        manifest_path = self.work_dir / ".repo/manifests/default.xml"
+        if result.returncode != 0 or not manifest_path.exists():
+            raise RuntimeError(
+                f"repo init 失败 (exit={result.returncode})，分支 common-{formatted_branch} 可能不存在"
+            )
 
-        remote = subprocess.run(f"git ls-remote https://android.googlesource.com/kernel/common {formatted_branch}",
-                               shell=True, capture_output=True, text=True).stdout.strip()
+        remote = subprocess.run(
+            f"git ls-remote https://android.googlesource.com/kernel/common {formatted_branch}",
+            shell=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
         if "deprecated" in remote:
-            manifest_path = self.work_dir / ".repo/manifests/default.xml"
             with open(manifest_path, "r") as f:
                 content = f.read()
             content = content.replace(f'"{formatted_branch}"', f'"deprecated/{formatted_branch}"')
