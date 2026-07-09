@@ -439,23 +439,34 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         with open(config_file, "a") as f:
             f.write("CONFIG_MODULE_SIG_FORCE=n\n")
 
-    def _resolve_kernel_build_timestamp(self) -> str:
-        """Use os_patch_level date so kernel UTS time aligns with system build time."""
+    def _resolve_kbuild_build_timestamp(self) -> Optional[str]:
+        if self.config.build_timestamp:
+            return self.config.build_timestamp.strip()
+
+        os_patch = self.config.os_patch_level
+        if not os_patch or os_patch == "lts":
+            return None
+
         import calendar
         import datetime
 
-        os_patch = self.config.os_patch_level
-        if os_patch and os_patch != "lts":
-            try:
-                year_str, month_str = os_patch.split("-", 1)
-                year, month = int(year_str), int(month_str)
-                day = min(5, calendar.monthrange(year, month)[1])
-                build_dt = datetime.datetime(year, month, day, 12, 0, 0, tzinfo=datetime.timezone.utc)
-                return build_dt.strftime("%a %b %d %H:%M:%S UTC %Y")
-            except (ValueError, IndexError):
-                logger.warning(f"无法解析 os_patch_level: {os_patch}，回退到当前 UTC 时间")
+        try:
+            year_str, month_str = os_patch.split("-", 1)
+            year, month = int(year_str), int(month_str)
+            day = min(5, calendar.monthrange(year, month)[1])
+            build_dt = datetime.datetime(year, month, day, 12, 0, 0, tzinfo=datetime.timezone.utc)
+            return build_dt.strftime("%a %b %d %H:%M:%S UTC %Y")
+        except (ValueError, IndexError):
+            logger.warning(f"无法从 os_patch_level 推导编译时间: {os_patch}")
+            return None
 
-        return datetime.datetime.now(datetime.timezone.utc).strftime("%a %b %d %H:%M:%S UTC %Y")
+    def _apply_kbuild_build_timestamp(self):
+        timestamp = self._resolve_kbuild_build_timestamp()
+        if not timestamp:
+            return
+        self.env["KBUILD_BUILD_TIMESTAMP"] = timestamp
+        self.shell.env = self.env
+        logger.info(f"KBUILD_BUILD_TIMESTAMP={timestamp}")
 
     def configure_kernel_name(self):
         logger.info("=== 配置内核名称 ===")
@@ -480,26 +491,6 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             if "-dirty" in content:
                 content = content.replace("-dirty", "")
                 with open(setlocalversion, "w") as f:
-                    f.write(content)
-
-        current_time = self._resolve_kernel_build_timestamp()
-        logger.info(f"内核编译时间戳: {current_time} (os_patch={self.config.os_patch_level})")
-        mkcompile_h = self.work_dir / "common/scripts/mkcompile_h"
-        if mkcompile_h.exists():
-            with open(mkcompile_h, "r") as f:
-                content = f.read()
-            content = content.replace('UTS_VERSION="$(echo $UTS_VERSION $CONFIG_FLAGS $TIMESTAMP | cut -b -$UTS_LEN)"',
-                                    f'UTS_VERSION="#1 SMP PREEMPT {current_time}"')
-            with open(mkcompile_h, "w") as f:
-                f.write(content)
-
-        if self.config.kernel_version in ["6.1", "6.6"]:
-            init_makefile = self.work_dir / "common/init/Makefile"
-            if init_makefile.exists():
-                with open(init_makefile, "r") as f:
-                    content = f.read()
-                content = content.replace('$(preempt-flag-y) "$(build-timestamp)"', f'$(preempt-flag-y) "{current_time}"')
-                with open(init_makefile, "w") as f:
                     f.write(content)
 
         if not (self.work_dir / "build/build.sh").exists():
@@ -589,6 +580,9 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
     def build_kernel(self) -> bool:
         logger.info("=== 开始编译内核 ===")
         self._chdir(self.work_dir)
+        self._apply_kbuild_build_timestamp()
+        timestamp = self.env.get("KBUILD_BUILD_TIMESTAMP", "")
+        timestamp_prefix = f'KBUILD_BUILD_TIMESTAMP="{timestamp}" ' if timestamp else ""
 
         build_config = self.work_dir / "common/build.config.gki.aarch64"
         if build_config.exists():
@@ -602,10 +596,17 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         try:
             if (self.work_dir / "build/build.sh").exists():
                 logger.info("使用旧版构建方式...")
-                result = self._run_cmd("LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh CC=\"/usr/bin/ccache clang\"", check=False)
+                result = self._run_cmd(
+                    f'{timestamp_prefix}LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh CC="/usr/bin/ccache clang"',
+                    check=False,
+                )
             else:
                 logger.info("使用 Bazel 构建方式...")
-                result = self._run_cmd("tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast --lto=thin //common:kernel_aarch64_dist", check=False)
+                action_env = f' --action_env=KBUILD_BUILD_TIMESTAMP="{timestamp}"' if timestamp else ""
+                result = self._run_cmd(
+                    f"tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast --lto=thin{action_env} //common:kernel_aarch64_dist",
+                    check=False,
+                )
 
             if result.returncode == 0:
                 logger.info("=== 内核编译成功 ===")

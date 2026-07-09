@@ -30,6 +30,11 @@ on:
         required: false
         type: string
         default: ''
+      build_timestamp:
+        description: '内核编译时间 (KBUILD_BUILD_TIMESTAMP，可选，如 Thu Mar 20 00:00:00 UTC 2025)'
+        required: false
+        type: string
+        default: ''
       use_zram:
         description: '启用 ZRAM (LZ4KD)'
         required: true
@@ -161,6 +166,7 @@ jobs:
           [ -z "${{ github.event.inputs.kernelsu_commit }}" ] || ARGS="$ARGS --ksu-commit=${{ github.event.inputs.kernelsu_commit }}"
           [ -z "${{ github.event.inputs.susfs_commit }}" ] || ARGS="$ARGS --susfs-commit=${{ github.event.inputs.susfs_commit }}"
           [ -z "${{ github.event.inputs.custom_version }}" ] || ARGS="$ARGS --custom-version=${{ github.event.inputs.custom_version }}"
+          [ -z "${{ github.event.inputs.build_timestamp }}" ] || ARGS="$ARGS --build-timestamp \"${{ github.event.inputs.build_timestamp }}\""
 
           python3 build.py $ARGS
 

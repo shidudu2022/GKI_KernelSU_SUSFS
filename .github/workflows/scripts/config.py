@@ -113,6 +113,7 @@ class BuildConfig:
     make_release: bool = True
     custom_version: Optional[str] = None
     revision: Optional[str] = None
+    build_timestamp: Optional[str] = None
     build_id: Optional[str] = None
 
     def __post_init__(self):
@@ -183,6 +184,7 @@ class BuildConfig:
             "make_release": self.make_release,
             "custom_version": self.custom_version,
             "revision": self.revision,
+            "build_timestamp": self.build_timestamp,
             "build_id": self.build_id,
         }
 
