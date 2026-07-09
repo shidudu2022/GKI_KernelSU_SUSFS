@@ -253,15 +253,17 @@ jobs:
         env:
           BUILD_TIMESTAMP: ${{ github.event.inputs.build_timestamp }}
         run: |
-          ARGS="--android ${{ github.event.inputs.android_version }}"
-          ARGS="$ARGS --kernel ${{ github.event.inputs.kernel_version }}"
-          ARGS="$ARGS --sub-level ${{ github.event.inputs.sub_level }}"
-          ARGS="$ARGS --os-patch ${{ github.event.inputs.os_patch_level }}"
-          ARGS="$ARGS --ksu-version ${{ github.event.inputs.kernelsu_version }}"
-          [ "${{ github.event.inputs.use_zram }}" = "true" ] && ARGS="$ARGS --zram"
-          [ "${{ github.event.inputs.use_kpm }}" = "false" ] && ARGS="$ARGS --no-kpm"
-          [ -n "$BUILD_TIMESTAMP" ] && ARGS="$ARGS --build-timestamp $BUILD_TIMESTAMP"
-          python3 ${{ env.SCRIPTS_DIR }}/release_generator.py release-files/RELEASE_BODY.md $ARGS
+          EXTRA=()
+          [ "${{ github.event.inputs.use_zram }}" = "true" ] && EXTRA+=(--zram)
+          [ "${{ github.event.inputs.use_kpm }}" = "false" ] && EXTRA+=(--no-kpm)
+          [ -n "$BUILD_TIMESTAMP" ] && EXTRA+=(--build-timestamp "$BUILD_TIMESTAMP")
+          python3 ${{ env.SCRIPTS_DIR }}/release_generator.py release-files/RELEASE_BODY.md \
+            --android ${{ github.event.inputs.android_version }} \
+            --kernel ${{ github.event.inputs.kernel_version }} \
+            --sub-level ${{ github.event.inputs.sub_level }} \
+            --os-patch ${{ github.event.inputs.os_patch_level }} \
+            --ksu-version "${{ github.event.inputs.kernelsu_version }}" \
+            "${EXTRA[@]}"
 
       - name: Create release
         uses: softprops/action-gh-release@v3
@@ -270,6 +272,7 @@ jobs:
           name: GKI Kernel ${{ env.RELEASE_TAG }}
           draft: false
           generate_release_notes: false
+          overwrite_files: true
           files: |
             release-files/*
           body_path: release-files/RELEASE_BODY.md
