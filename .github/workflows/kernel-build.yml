@@ -244,8 +244,10 @@ jobs:
         run: |
           mkdir -p release-files
           python3 ${{ env.SCRIPTS_DIR }}/extract_artifacts.py all-artifacts release-files
-          cd release-files && sha256sum * > SHA256SUMS.txt
-          ls -la release-files/
+          cd release-files
+          sha256sum android14-*-AnyKernel3.zip android14-*-boot*.img > SHA256SUMS.txt 2>/dev/null || \
+            sha256sum android*.{zip,img} > SHA256SUMS.txt
+          ls -la
 
       - name: Generate release body
         run: |

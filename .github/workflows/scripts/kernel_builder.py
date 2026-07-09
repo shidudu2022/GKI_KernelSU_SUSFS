@@ -482,6 +482,38 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             json.dump({"SOURCE_DATE_EPOCH": epoch}, f)
         logger.info(f"写入 {status_path}: SOURCE_DATE_EPOCH={epoch}")
 
+    def _patch_setup_env_for_timestamp(self, epoch: int):
+        epoch_file = self.work_dir / "common/.kleaf_source_date_epoch"
+        setup_env = self.work_dir / "build/_setup_env.sh"
+        if not epoch_file.parent.exists():
+            return
+        with open(epoch_file, "w") as f:
+            f.write(str(epoch))
+        if not setup_env.exists():
+            logger.warning(f"未找到 {setup_env}，跳过编译时间补丁")
+            return
+
+        marker = "# kleaf_source_date_epoch_override"
+        with open(setup_env, "r") as f:
+            content = f.read()
+        if marker in content:
+            return
+
+        needle = 'if [ -z "${SOURCE_DATE_EPOCH}" ]; then'
+        insert = (
+            f"{marker}\n"
+            'if [ -z "${SOURCE_DATE_EPOCH}" ] && [ -f "${ROOT_DIR}/${KERNEL_DIR}/.kleaf_source_date_epoch" ]; then\n'
+            '  export SOURCE_DATE_EPOCH=$(cat "${ROOT_DIR}/${KERNEL_DIR}/.kleaf_source_date_epoch")\n'
+            "fi\n"
+            'if [ -z "${SOURCE_DATE_EPOCH}" ]; then'
+        )
+        if needle not in content:
+            logger.warning("_setup_env.sh 结构变化，无法注入 SOURCE_DATE_EPOCH 覆盖")
+            return
+        with open(setup_env, "w") as f:
+            f.write(content.replace(needle, insert, 1))
+        logger.info(f"已修补 _setup_env.sh，SOURCE_DATE_EPOCH={epoch}")
+
     def _apply_kbuild_build_timestamp(self):
         timestamp = self._resolve_kbuild_build_timestamp()
         if not timestamp:
@@ -490,6 +522,8 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         epoch = self._timestamp_to_epoch(timestamp)
         if epoch is not None:
             self.env["SOURCE_DATE_EPOCH"] = str(epoch)
+            self._write_kleaf_workspace_status(epoch)
+            self._patch_setup_env_for_timestamp(epoch)
         self.shell.env = self.env
         logger.info(f"KBUILD_BUILD_TIMESTAMP={timestamp}")
         if epoch is not None:
@@ -633,11 +667,12 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 # 未启用 stamp 时会强制 SOURCE_DATE_EPOCH=0（1970-01-01）。
                 epoch = self.env.get("SOURCE_DATE_EPOCH", "")
                 bazel_flags = ""
+                bazel_prefix = ""
                 if epoch:
-                    self._write_kleaf_workspace_status(int(epoch))
                     bazel_flags = f' --config=stamp --action_env=SOURCE_DATE_EPOCH={epoch}'
+                    bazel_prefix = f'SOURCE_DATE_EPOCH={epoch} '
                 result = self._run_cmd(
-                    f"tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast --lto=thin{bazel_flags} //common:kernel_aarch64_dist",
+                    f"{bazel_prefix}tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast --lto=thin{bazel_flags} //common:kernel_aarch64_dist",
                     check=False,
                 )
 
