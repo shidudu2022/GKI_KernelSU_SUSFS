@@ -1,7 +1,9 @@
+import json
 import os
 import subprocess
 import logging
 import re
+import datetime
 from pathlib import Path
 from typing import Optional, Callable
 from dataclasses import dataclass, field
@@ -450,7 +452,6 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             return None
 
         import calendar
-        import datetime
 
         try:
             year_str, month_str = os_patch.split("-", 1)
@@ -462,13 +463,37 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             logger.warning(f"无法从 os_patch_level 推导编译时间: {os_patch}")
             return None
 
+    def _timestamp_to_epoch(self, timestamp: str) -> Optional[int]:
+        for fmt in ("%a %b %d %H:%M:%S UTC %Y",):
+            try:
+                dt = datetime.datetime.strptime(timestamp, fmt)
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+                return int(dt.timestamp())
+            except ValueError:
+                continue
+        logger.warning(f"无法解析编译时间: {timestamp}")
+        return None
+
+    def _write_kleaf_workspace_status(self, epoch: int):
+        status_path = self.work_dir / "common/workspace_status.json"
+        if not status_path.parent.exists():
+            return
+        with open(status_path, "w") as f:
+            json.dump({"SOURCE_DATE_EPOCH": epoch}, f)
+        logger.info(f"写入 {status_path}: SOURCE_DATE_EPOCH={epoch}")
+
     def _apply_kbuild_build_timestamp(self):
         timestamp = self._resolve_kbuild_build_timestamp()
         if not timestamp:
             return
         self.env["KBUILD_BUILD_TIMESTAMP"] = timestamp
+        epoch = self._timestamp_to_epoch(timestamp)
+        if epoch is not None:
+            self.env["SOURCE_DATE_EPOCH"] = str(epoch)
         self.shell.env = self.env
         logger.info(f"KBUILD_BUILD_TIMESTAMP={timestamp}")
+        if epoch is not None:
+            logger.info(f"SOURCE_DATE_EPOCH={epoch}")
 
     def configure_kernel_name(self):
         logger.info("=== 配置内核名称 ===")
@@ -604,9 +629,15 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 )
             else:
                 logger.info("使用 Bazel 构建方式...")
-                action_env = f' --action_env=KBUILD_BUILD_TIMESTAMP="{timestamp}"' if timestamp else ""
+                # Kleaf 通过 SOURCE_DATE_EPOCH + --config=stamp 嵌入编译时间；
+                # 未启用 stamp 时会强制 SOURCE_DATE_EPOCH=0（1970-01-01）。
+                epoch = self.env.get("SOURCE_DATE_EPOCH", "")
+                bazel_flags = ""
+                if epoch:
+                    self._write_kleaf_workspace_status(int(epoch))
+                    bazel_flags = f' --config=stamp --action_env=SOURCE_DATE_EPOCH={epoch}'
                 result = self._run_cmd(
-                    f"tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast --lto=thin{action_env} //common:kernel_aarch64_dist",
+                    f"tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast --lto=thin{bazel_flags} //common:kernel_aarch64_dist",
                     check=False,
                 )
 
