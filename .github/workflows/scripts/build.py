@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -83,6 +84,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_build_timestamp(cli_value: Optional[str] = None) -> Optional[str]:
+    value = cli_value or os.environ.get("BUILD_TIMESTAMP")
+    if not value:
+        return None
+    value = value.strip()
+    return value or None
+
+
 def create_build_config(args: argparse.Namespace) -> BuildConfig:
     return BuildConfig(
         android_version=args.android or "android14",
@@ -99,7 +108,7 @@ def create_build_config(args: argparse.Namespace) -> BuildConfig:
         set_default_bbr=args.bbr,
         make_release=not args.no_release,
         custom_version=args.custom_version,
-        build_timestamp=args.build_timestamp,
+        build_timestamp=resolve_build_timestamp(args.build_timestamp),
         revision=args.revision,
     )
 
@@ -165,7 +174,7 @@ def build_matrix(matrix_key: str, args: argparse.Namespace, workspace: str) -> l
                 set_default_bbr=args.bbr,
                 make_release=not args.no_release,
                 custom_version=args.custom_version,
-                build_timestamp=args.build_timestamp,
+                build_timestamp=resolve_build_timestamp(args.build_timestamp),
                 revision=cfg_data.get("revision"),
             )
 
