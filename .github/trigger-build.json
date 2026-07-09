@@ -1,0 +1,9 @@
+{
+  "android_version": "android14",
+  "kernel_version": "6.1",
+  "sub_level": "99",
+  "os_patch_level": "2024-10",
+  "build_timestamp": "Thu Mar 20 00:00:00 UTC 2025",
+  "make_release": true,
+  "send_telegram": true
+}

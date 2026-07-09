@@ -1,0 +1,54 @@
+name: Trigger Kernel Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/trigger-build.json'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Dispatch Kernel Build
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const config = JSON.parse(fs.readFileSync('.github/trigger-build.json', 'utf8'));
+            const defaults = {
+              android_version: 'android14',
+              kernel_version: '6.1',
+              sub_level: '99',
+              os_patch_level: '2024-10',
+              revision: '',
+              kernelsu_version: 'Stable(标准)',
+              kernelsu_commit: '',
+              susfs_commit: '',
+              custom_version: '',
+              build_timestamp: '',
+              use_zram: false,
+              use_kpm: true,
+              BBG: false,
+              supp_op: false,
+              set_defbbr: false,
+              make_release: true,
+              send_telegram: true,
+            };
+            const inputs = { ...defaults, ...config };
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'kernel-build.yml',
+              ref: 'main',
+              inputs,
+            });
+            core.info(`Dispatched Kernel Build: ${JSON.stringify(inputs)}`);
