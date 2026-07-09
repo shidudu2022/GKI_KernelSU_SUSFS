@@ -718,6 +718,52 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             logger.error(f"编译过程出错: {e}")
             return False
 
+    def _format_uts_timestamp(self, timestamp: str) -> bytes:
+        dt = datetime.datetime.strptime(timestamp, "%a %b %d %H:%M:%S UTC %Y")
+        if dt.day < 10:
+            formatted = f"{dt.strftime('%a %b')}  {dt.day} {dt.strftime('%H:%M:%S UTC %Y')}"
+        else:
+            formatted = f"{dt.strftime('%a %b')} {dt.day} {dt.strftime('%H:%M:%S UTC %Y')}"
+        return formatted.encode("ascii")
+
+    def _patch_kernel_binary_timestamp(self, path: Path) -> bool:
+        timestamp = self.env.get("KBUILD_BUILD_TIMESTAMP", "")
+        if not timestamp or not path.exists():
+            return False
+        old = b"Thu Jan  1 00:00:00 UTC 1970"
+        new = self._format_uts_timestamp(timestamp)
+        if len(new) != len(old):
+            logger.warning(f"UTS 时间戳长度不匹配: {len(new)} != {len(old)}")
+            return False
+        data = path.read_bytes()
+        if old not in data:
+            return False
+        path.write_bytes(data.replace(old, new))
+        logger.info(f"已修补内核时间戳: {path.name} -> {new.decode()}")
+        return True
+
+    def _patch_kernel_artifacts_timestamp(self):
+        timestamp = self.env.get("KBUILD_BUILD_TIMESTAMP", "")
+        if not timestamp:
+            return
+        targets = []
+        if self.config.android_version in ["android12", "android13"]:
+            image_source = self.work_dir / f"out/{self.config.android_version}-{self.config.kernel_version}/dist"
+        else:
+            image_source = self.work_dir / "bazel-bin/common/kernel_aarch64"
+        bootimgs_dir = self.work_dir / "bootimgs"
+        for base in [image_source, bootimgs_dir, self.work_dir]:
+            if not base.exists():
+                continue
+            for name in ["Image", "Image.gz", "Image.lz4", "boot.img", "boot-gz.img", "boot-lz4.img"]:
+                targets.append(base / name)
+            targets.extend(base.glob(f"{self.config.android_version}-{self.config.kernel_version}.*-boot*.img"))
+        patched = 0
+        for path in targets:
+            if self._patch_kernel_binary_timestamp(path):
+                patched += 1
+        logger.info(f"内核时间戳修补完成，更新 {patched} 个文件")
+
     def patch_kpm_image(self):
         if not self.config.use_kpm or self.config.kernel_version == "6.6":
             return
@@ -843,8 +889,10 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 return BuildResult(success=False, config=self.config, message="内核编译失败", build_time=time.time() - start_time)
 
             self.patch_kpm_image()
+            self._patch_kernel_artifacts_timestamp()
             artifacts = []
             artifacts.extend(self.prepare_boot_images())
+            self._patch_kernel_artifacts_timestamp()
             artifacts.extend(self.create_anykernel_zips())
 
             build_time = time.time() - start_time
