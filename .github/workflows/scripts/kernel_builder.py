@@ -270,6 +270,11 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 self._chdir(ksu_dir)
                 self._run_cmd(f"git checkout {self.config.kernelsu_commit}", check=False)
                 self._chdir(self.work_dir)
+        # 修复KernelSU中无限循环的符号链接
+        ksu_kernel_link = self.work_dir / "KernelSU/kernel/kernel"
+        if ksu_kernel_link.is_symlink():
+            logger.info("删除无限循环的符号链接: KernelSU/kernel/kernel")
+            ksu_kernel_link.unlink()
 
     def add_bbg(self):
         if not self.config.use_bbg:
@@ -346,6 +351,16 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         task_mmu = Path("fs/proc/task_mmu.c")
         if not task_mmu.exists():
             return
+
+        # 修复未初始化的dentry变量
+        with open(task_mmu, "r") as f:
+            content = f.read()
+        
+        if "struct dentry *dentry;" in content and "struct dentry *dentry = NULL;" not in content:
+            logger.info("修复未初始化的dentry变量")
+            content = content.replace("struct dentry *dentry;", "struct dentry *dentry = NULL;")
+            with open(task_mmu, "w") as f:
+                f.write(content)
 
         fb = f"{self.config.android_version}-{self.config.kernel_version}"
         with open(task_mmu, "r") as f:
@@ -620,9 +635,17 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 if config_file.exists():
                     with open(config_file, "r") as f:
                         content = f.read()
-                    content = re.sub(r'^CONFIG_LOCALVERSION=".*"$', f'CONFIG_LOCALVERSION="{self.config.custom_version}"', content, flags=re.MULTILINE)
-                    with open(config_file, "w") as f:
-                        f.write(content)
+                    # 尝试替换现有的CONFIG_LOCALVERSION行
+                    new_content = re.sub(r'^CONFIG_LOCALVERSION=".*"$', f'CONFIG_LOCALVERSION="{self.config.custom_version}"', content, flags=re.MULTILINE)
+                    # 如果没有找到CONFIG_LOCALVERSION行，则添加新行
+                    if new_content == content:
+                        logger.info(f"添加 CONFIG_LOCALVERSION=\"{self.config.custom_version}\" 到 gki_defconfig")
+                        with open(config_file, "a") as f:
+                            f.write(f'\nCONFIG_LOCALVERSION="{self.config.custom_version}"\n')
+                    else:
+                        logger.info(f"更新 CONFIG_LOCALVERSION=\"{self.config.custom_version}\" 在 gki_defconfig")
+                        with open(config_file, "w") as f:
+                            f.write(new_content)
                 else:
                     logger.warning(f"配置文件不存在，跳过 custom_version 设置: {config_file}")
 
@@ -704,8 +727,12 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 if epoch:
                     bazel_flags = f' --config=stamp --action_env=SOURCE_DATE_EPOCH={epoch}'
                     bazel_prefix = f'SOURCE_DATE_EPOCH={epoch} '
+                # 使用HOME环境变量或/tmp来避免权限问题
+                import os
+                bazel_cache = os.path.expanduser("~/.cache/bazel")
+                os.makedirs(bazel_cache, exist_ok=True)
                 result = self._run_cmd(
-                    f"{bazel_prefix}tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast --lto=thin{bazel_flags} //common:kernel_aarch64_dist",
+                    f"{bazel_prefix}tools/bazel build --disk_cache={bazel_cache} --config=fast --lto=thin{bazel_flags} //common:kernel_aarch64_dist",
                     check=False,
                 )
 
@@ -804,6 +831,8 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
 
         if self.config.android_version == "android12":
             self._prepare_android12_boot_images(bootimgs_dir, artifacts)
+        elif self.config.android_version in ["android13", "android14", "android15"]:
+            self._prepare_gki_boot_images(bootimgs_dir, artifacts)
         else:
             self._prepare_boot_images_generic(bootimgs_dir, artifacts)
         return artifacts
@@ -820,8 +849,46 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             self._run_cmd(f"$UNPACK_BOOTIMG --boot_img={boot_img_path}", check=False)
         self._create_boot_image_variants(bootimgs_dir, artifacts, has_ramdisk=True)
 
+    def _prepare_gki_boot_images(self, bootimgs_dir: Path, artifacts: list):
+        """为Android 13/14/15准备包含ramdisk的boot镜像"""
+        self._chdir(bootimgs_dir)
+        # 尝试下载官方GKI boot镜像
+        av = self.config.android_version
+        kv = self.config.kernel_version
+        os_patch = self.config.os_patch_level
+        
+        # 构建可能的GKI URL
+        gki_urls = [
+            f"https://dl.google.com/android/gki/gki-certified-boot-{av}-{kv}-{os_patch}_r1.zip",
+            f"https://dl.google.com/android/gki/gki-certified-boot-{av}-{kv}-{os_patch}.zip",
+        ]
+        
+        downloaded = False
+        for gki_url in gki_urls:
+            logger.info(f"尝试下载官方GKI boot镜像: {gki_url}")
+            result = subprocess.run(f"curl -sL -w '%{{http_code}}' {gki_url} -o /dev/null", shell=True, capture_output=True, text=True)
+            if "200" in result.stdout:
+                logger.info(f"找到官方GKI boot镜像，开始下载...")
+                self._run_cmd(f"curl -Lo gki-kernel.zip {gki_url} && unzip -o gki-kernel.zip && rm gki-kernel.zip", check=False)
+                # 查找boot镜像文件
+                boot_imgs = list(bootimgs_dir.glob("boot-*.img"))
+                if boot_imgs:
+                    boot_img_path = boot_imgs[0]
+                    logger.info(f"解包ramdisk: {boot_img_path}")
+                    self._run_cmd(f"$UNPACK_BOOTIMG --boot_img={boot_img_path}", check=False)
+                    downloaded = True
+                    break
+        
+        if downloaded and (bootimgs_dir / "out/ramdisk").exists():
+            logger.info("成功获取ramdisk，创建包含ramdisk的boot镜像")
+            self._create_boot_image_variants(bootimgs_dir, artifacts, has_ramdisk=True)
+        else:
+            logger.warning("未找到官方GKI boot镜像或ramdisk，创建不含ramdisk的boot镜像（仅供测试，不推荐刷入）")
+            self._create_boot_image_variants(bootimgs_dir, artifacts, has_ramdisk=False)
+
     def _prepare_boot_images_generic(self, bootimgs_dir: Path, artifacts: list):
         self._chdir(bootimgs_dir)
+        logger.warning("创建不含ramdisk的boot镜像（仅供测试，不推荐刷入）")
         self._create_boot_image_variants(bootimgs_dir, artifacts, has_ramdisk=False)
 
     def _create_boot_image_variants(self, bootimgs_dir: Path, artifacts: list, has_ramdisk: bool = False):
