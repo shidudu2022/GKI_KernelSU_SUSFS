@@ -831,6 +831,8 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
 
         if self.config.android_version == "android12":
             self._prepare_android12_boot_images(bootimgs_dir, artifacts)
+        elif self.config.android_version in ["android13", "android14", "android15"]:
+            self._prepare_gki_boot_images(bootimgs_dir, artifacts)
         else:
             self._prepare_boot_images_generic(bootimgs_dir, artifacts)
         return artifacts
@@ -847,8 +849,46 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             self._run_cmd(f"$UNPACK_BOOTIMG --boot_img={boot_img_path}", check=False)
         self._create_boot_image_variants(bootimgs_dir, artifacts, has_ramdisk=True)
 
+    def _prepare_gki_boot_images(self, bootimgs_dir: Path, artifacts: list):
+        """为Android 13/14/15准备包含ramdisk的boot镜像"""
+        self._chdir(bootimgs_dir)
+        # 尝试下载官方GKI boot镜像
+        av = self.config.android_version
+        kv = self.config.kernel_version
+        os_patch = self.config.os_patch_level
+        
+        # 构建可能的GKI URL
+        gki_urls = [
+            f"https://dl.google.com/android/gki/gki-certified-boot-{av}-{kv}-{os_patch}_r1.zip",
+            f"https://dl.google.com/android/gki/gki-certified-boot-{av}-{kv}-{os_patch}.zip",
+        ]
+        
+        downloaded = False
+        for gki_url in gki_urls:
+            logger.info(f"尝试下载官方GKI boot镜像: {gki_url}")
+            result = subprocess.run(f"curl -sL -w '%{{http_code}}' {gki_url} -o /dev/null", shell=True, capture_output=True, text=True)
+            if "200" in result.stdout:
+                logger.info(f"找到官方GKI boot镜像，开始下载...")
+                self._run_cmd(f"curl -Lo gki-kernel.zip {gki_url} && unzip -o gki-kernel.zip && rm gki-kernel.zip", check=False)
+                # 查找boot镜像文件
+                boot_imgs = list(bootimgs_dir.glob("boot-*.img"))
+                if boot_imgs:
+                    boot_img_path = boot_imgs[0]
+                    logger.info(f"解包ramdisk: {boot_img_path}")
+                    self._run_cmd(f"$UNPACK_BOOTIMG --boot_img={boot_img_path}", check=False)
+                    downloaded = True
+                    break
+        
+        if downloaded and (bootimgs_dir / "out/ramdisk").exists():
+            logger.info("成功获取ramdisk，创建包含ramdisk的boot镜像")
+            self._create_boot_image_variants(bootimgs_dir, artifacts, has_ramdisk=True)
+        else:
+            logger.warning("未找到官方GKI boot镜像或ramdisk，创建不含ramdisk的boot镜像（仅供测试，不推荐刷入）")
+            self._create_boot_image_variants(bootimgs_dir, artifacts, has_ramdisk=False)
+
     def _prepare_boot_images_generic(self, bootimgs_dir: Path, artifacts: list):
         self._chdir(bootimgs_dir)
+        logger.warning("创建不含ramdisk的boot镜像（仅供测试，不推荐刷入）")
         self._create_boot_image_variants(bootimgs_dir, artifacts, has_ramdisk=False)
 
     def _create_boot_image_variants(self, bootimgs_dir: Path, artifacts: list, has_ramdisk: bool = False):
